@@ -14,9 +14,6 @@ import (
 const (
 	// epollEventBufferSize per IO instance.
 	epollEventBufferSize = 1000
-
-	// epollet is unsigned syscall.EPOLLET.
-	epollet = 0x80000000
 )
 
 // Data holds a message part which will be sent or has been received.
@@ -68,7 +65,7 @@ func (io *IO) Add(s *zmq.Socket, send <-chan Data, recv chan<- Data) (err error)
 			notifier: make(chan struct{}, 1),
 		}
 		epollEvent = &syscall.EpollEvent{
-			Events: syscall.EPOLLIN | epollet,
+			Events: syscall.EPOLLIN | syscall.EPOLLET&0xffffffff,
 		}
 	)
 
