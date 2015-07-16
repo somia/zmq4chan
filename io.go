@@ -151,6 +151,10 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 		s.Close()
 	}()
 
+	const (
+		fullState = zmq.POLLIN | zmq.POLLOUT
+	)
+
 	var (
 		sendBuf Data
 		recvBuf Data
@@ -179,9 +183,11 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 				return
 			}
 
-			if state, err = s.GetEvents(); err != nil {
-				handleGeneralError(err)
-				return
+			if state&fullState != fullState {
+				if state, err = s.GetEvents(); err != nil {
+					handleGeneralError(err)
+					return
+				}
 			}
 
 		case sendBuf, ok = <-sendChan:
