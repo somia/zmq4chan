@@ -156,6 +156,8 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 	)
 
 	var (
+		staleState bool
+
 		sendBuf Data
 		recvBuf Data
 	)
@@ -183,11 +185,15 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 				return
 			}
 
+			staleState = true
+
 			if state&fullState != fullState {
 				if state, err = s.GetEvents(); err != nil {
 					handleGeneralError(err)
 					return
 				}
+
+				staleState = false
 			}
 
 		case sendBuf, ok = <-sendChan:
@@ -202,43 +208,63 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 		for {
 			retry := false
 
-			if sendBuf.Bytes != nil && state&zmq.POLLOUT != 0 {
-				flags := zmq.DONTWAIT
-
-				if sendBuf.More {
-					flags |= zmq.SNDMORE
-				}
-
-				if _, err = s.SendBytes(sendBuf.Bytes, flags); err == nil {
-					sendBuf.Bytes = nil
-					retry = true
-				} else if !handleIOError(err) {
-					return
-				}
-
-				if state, err = s.GetEvents(); err != nil {
-					handleGeneralError(err)
-					return
-				}
-			}
-
-			if recvBuf.Bytes == nil && state&zmq.POLLIN != 0 {
-				if data, err := s.RecvBytes(zmq.DONTWAIT); err == nil {
-					if more, err := s.GetRcvmore(); err == nil {
-						recvBuf.Bytes = data
-						recvBuf.More = more
-						retry = true
-					} else {
+			if sendBuf.Bytes != nil {
+				if state&zmq.POLLOUT == 0 && staleState {
+					if state, err = s.GetEvents(); err != nil {
 						handleGeneralError(err)
 						return
 					}
-				} else if !handleIOError(err) {
-					return
+
+					staleState = false
 				}
 
-				if state, err = s.GetEvents(); err != nil {
-					handleGeneralError(err)
-					return
+				if state&zmq.POLLOUT != 0 {
+					flags := zmq.DONTWAIT
+
+					if sendBuf.More {
+						flags |= zmq.SNDMORE
+					}
+
+					if _, err = s.SendBytes(sendBuf.Bytes, flags); err == nil {
+						sendBuf.Bytes = nil
+						retry = true
+					} else if handleIOError(err) {
+						state &^= zmq.POLLOUT
+					} else {
+						return
+					}
+
+					staleState = true
+				}
+			}
+
+			if recvBuf.Bytes == nil {
+				if state&zmq.POLLIN == 0 && staleState {
+					if state, err = s.GetEvents(); err != nil {
+						handleGeneralError(err)
+						return
+					}
+
+					staleState = false
+				}
+
+				if state&zmq.POLLIN != 0 {
+					if data, err := s.RecvBytes(zmq.DONTWAIT); err == nil {
+						if more, err := s.GetRcvmore(); err == nil {
+							recvBuf.Bytes = data
+							recvBuf.More = more
+							retry = true
+						} else {
+							handleGeneralError(err)
+							return
+						}
+					} else if handleIOError(err) {
+						state &^= zmq.POLLIN
+					} else {
+						return
+					}
+
+					staleState = true
 				}
 			}
 
@@ -263,6 +289,8 @@ func handleGeneralError(err error) {
 	panic(err)
 }
 
+// handleIOError returns true if the operation failed due to non-blocking
+// behavior or something like that.
 func handleIOError(err error) bool {
 	switch err {
 	case zmq.ErrorSocketClosed, zmq.ErrorContextClosed:
@@ -271,6 +299,9 @@ func handleIOError(err error) bool {
 
 	switch zmq.AsErrno(err) {
 	case zmq.Errno(syscall.EAGAIN):
+		return true
+
+	case zmq.EFSM:
 		return true
 
 	case zmq.ETERM:
