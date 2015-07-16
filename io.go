@@ -60,14 +60,13 @@ func (io *IO) Add(s *zmq.Socket, send <-chan Data, recv chan<- Data) (err error)
 		return
 	}
 
-	var (
-		w = &worker{
-			notifier: make(chan struct{}, 1),
-		}
-		epollEvent = &syscall.EpollEvent{
-			Events: syscall.EPOLLIN | syscall.EPOLLET&0xffffffff,
-		}
-	)
+	w := &worker{
+		notifier: make(chan struct{}, 1),
+	}
+
+	epollEvent := &syscall.EpollEvent{
+		Events: syscall.EPOLLIN | syscall.EPOLLET&0xffffffff,
+	}
 
 	setEpollDataPtr(epollEvent, uintptr(unsafe.Pointer(w)))
 
