@@ -6,20 +6,18 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"unsafe"
 
 	zmq "github.com/pebbe/zmq4"
 )
 
 const (
-	// epollEventBufferSize per IO instance.
-	epollEventBufferSize = 1000
+	epollEventBufferSize = 256 // per IO instance
 )
 
 // Data holds a message part which will be sent or has been received.
 type Data struct {
-	Bytes []byte // Bytes is non-nil.
-	More  bool   // More is true if more parts will be sent/received.
+	Bytes []byte // non-nil
+	More  bool   // true if more parts will be sent/received
 }
 
 // String converts r.Bytes to a string.
@@ -31,7 +29,7 @@ func (r Data) String() string {
 type IO struct {
 	epollFd int
 	lock    sync.Mutex
-	workers map[*zmq.Socket]*worker
+	workers map[int32]*worker
 }
 
 // NewIO allocates resources which will not be released before program
@@ -44,7 +42,7 @@ func NewIO() (io *IO) {
 
 	io = &IO{
 		epollFd: epollFd,
-		workers: make(map[*zmq.Socket]*worker),
+		workers: make(map[int32]*worker),
 	}
 
 	go eventLoop(io)
@@ -64,13 +62,24 @@ func (io *IO) Add(s *zmq.Socket, send <-chan Data, recv chan<- Data) (err error)
 		notifier: make(chan struct{}, 1),
 	}
 
-	epollEvent := &syscall.EpollEvent{
+	io.lock.Lock()
+	io.workers[int32(fd)] = w
+	io.lock.Unlock()
+
+	defer func() {
+		if err != nil {
+			io.lock.Lock()
+			delete(io.workers, int32(fd))
+			io.lock.Unlock()
+		}
+	}()
+
+	e := &syscall.EpollEvent{
 		Events: syscall.EPOLLIN | syscall.EPOLLET&0xffffffff,
+		Fd:     int32(fd),
 	}
 
-	setEpollDataPtr(epollEvent, uintptr(unsafe.Pointer(w)))
-
-	if err = syscall.EpollCtl(io.epollFd, syscall.EPOLL_CTL_ADD, fd, epollEvent); err != nil {
+	if err = syscall.EpollCtl(io.epollFd, syscall.EPOLL_CTL_ADD, fd, e); err != nil {
 		return
 	}
 
@@ -80,21 +89,22 @@ func (io *IO) Add(s *zmq.Socket, send <-chan Data, recv chan<- Data) (err error)
 		return
 	}
 
-	io.lock.Lock()
-	io.workers[s] = w
-	io.lock.Unlock()
-
 	go workerLoop(io, s, fd, w, send, recv, state)
 	return
 }
 
 // Remove closes a socket.  If it has been registered, it will be removed in
 // orderly fashion.
-func (io *IO) Remove(s *zmq.Socket) {
+func (io *IO) Remove(s *zmq.Socket) (err error) {
+	fd, err := s.GetFd()
+	if err != nil {
+		return
+	}
+
 	io.lock.Lock()
-	w := io.workers[s]
+	w := io.workers[int32(fd)]
 	if w != nil {
-		delete(io.workers, s)
+		delete(io.workers, int32(fd))
 	}
 	io.lock.Unlock()
 
@@ -102,31 +112,33 @@ func (io *IO) Remove(s *zmq.Socket) {
 		atomic.StoreInt32(&w.closed, 1)
 		w.notify()
 	} else {
-		s.Close()
+		err = s.Close()
 	}
+	return
 }
 
 func eventLoop(io *IO) {
-	epollEvents := make([]syscall.EpollEvent, epollEventBufferSize)
+	const mask = syscall.EPOLLIN | syscall.EPOLLERR | syscall.EPOLLHUP
+
+	buf := make([]syscall.EpollEvent, epollEventBufferSize)
 
 	for {
-		n, err := syscall.EpollWait(io.epollFd, epollEvents, -1)
+		n, err := syscall.EpollWait(io.epollFd, buf, -1)
 		if err != nil {
-			return
+			panic(err)
 		}
 
-		for i := 0; i < n; i++ {
-			e := &epollEvents[i]
-			w := (*worker)(unsafe.Pointer(getEpollDataPtr(e)))
+		io.lock.Lock()
 
-			if e.Events&syscall.EPOLLERR != 0 {
-				panic("epoll error event")
-			}
-
-			if e.Events&syscall.EPOLLIN != 0 {
-				w.notify()
+		for _, e := range buf[:n] {
+			if e.Events&mask != 0 {
+				if w := io.workers[e.Fd]; w != nil {
+					w.notify()
+				}
 			}
 		}
+
+		io.lock.Unlock()
 	}
 }
 

@@ -1,6 +1,8 @@
 package zmq4chan_test
 
 import (
+	"fmt"
+	"strconv"
 	"testing"
 
 	zmq "github.com/pebbe/zmq4"
@@ -160,5 +162,90 @@ func TestIO(t *testing.T) {
 				send2 = nil
 			}
 		}
+	}
+}
+
+func TestLotsOfIO(t *testing.T) {
+	const (
+		numSockets = 503
+	)
+
+	done := make(chan struct{})
+
+	for i := 0; i < numSockets; i++ {
+		addr := fmt.Sprintf("inproc://%d", i)
+
+		numMessages := i * 11
+		if i&1 == 1 {
+			numMessages -= 1317
+		}
+
+		go func(addr string, numMessages int) {
+			defer func() {
+				done <- struct{}{}
+			}()
+
+			s, err := zmq.NewSocket(zmq.PULL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer io.Remove(s)
+
+			if err := s.Bind(addr); err != nil {
+				t.Fatal(err)
+			}
+
+			c := make(chan zmqchan.Data)
+
+			if err := io.Add(s, nil, c); err != nil {
+				t.Fatal(err)
+			}
+
+			for n := 0; n < numMessages; n++ {
+				m := <-c
+
+				ms, err := strconv.Atoi(m.String())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if ms != n {
+					t.Fatalf("%d: %d != %d", i, ms, n)
+				}
+			}
+		}(addr, numMessages)
+
+		go func(addr string, numMessages int) {
+			defer func() {
+				done <- struct{}{}
+			}()
+
+			s, err := zmq.NewSocket(zmq.PUSH)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer io.Remove(s)
+
+			if err := s.Connect(addr); err != nil {
+				t.Fatal(err)
+			}
+
+			c := make(chan zmqchan.Data)
+			defer close(c)
+
+			if err := io.Add(s, c, nil); err != nil {
+				t.Fatal(err)
+			}
+
+			for n := 0; n < numMessages; n++ {
+				c <- zmqchan.Data{
+					Bytes: []byte(strconv.Itoa(n)),
+				}
+			}
+		}(addr, numMessages)
+	}
+
+	for i := 0; i < numSockets; i++ {
+		<-done
 	}
 }
