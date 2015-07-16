@@ -30,13 +30,12 @@ var (
 )
 
 func TestSendMessageBytes(t *testing.T) {
-	var (
-		input  = make(chan [][]byte)
-		output = zmqchan.SendMessageBytes(input)
-	)
+	input := make(chan [][]byte)
+	output := zmqchan.SendMessageBytes(input)
 
 	go func() {
 		defer close(input)
+
 		for _, message := range messages {
 			input <- message
 		}
@@ -48,17 +47,48 @@ func TestSendMessageBytes(t *testing.T) {
 		if bytes.Compare(part.Bytes, parts[i].Bytes) != 0 {
 			t.Errorf("i=%d Bytes mismatch", i)
 		}
+
 		if part.More != parts[i].More {
 			t.Errorf("i=%d More mismatch", i)
 		}
+
 		i++
 	}
 
 	if i != len(parts) {
-		t.Error("too few parts received")
+		t.Error("incorrect number of parts received")
 	}
 }
 
 func TestRecvMessageBytes(t *testing.T) {
-	t.Log("TODO")
+	output := make(chan [][]byte)
+	input := zmqchan.RecvMessageBytes(output)
+
+	go func() {
+		defer close(input)
+
+		for _, part := range parts {
+			input <- part
+		}
+	}()
+
+	i := 0
+
+	for message := range output {
+		if len(message) != len(messages[i]) {
+			t.Fatalf("i=%d length mismatch", i)
+		}
+
+		for j, part := range message {
+			if bytes.Compare(part, messages[i][j]) != 0 {
+				t.Errorf("i=%d part=%d mismatch", i, j)
+			}
+		}
+
+		i++
+	}
+
+	if i != len(messages) {
+		t.Error("incorrect number of messages received")
+	}
 }
