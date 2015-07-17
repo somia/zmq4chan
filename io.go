@@ -17,7 +17,7 @@ const (
 // Data holds a message part which will be sent or has been received.
 type Data struct {
 	Bytes []byte
-	More  bool   // true if more parts will be sent/received
+	More  bool // true if more parts will be sent/received
 }
 
 // String converts r.Bytes to a string.
