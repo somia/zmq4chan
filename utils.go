@@ -22,7 +22,8 @@ func SendMessageBytes(send <-chan [][]byte) <-chan Data {
 }
 
 // RecvMessageBytes converts individual parts into complete messages.  The
-// returned channel should be closed by the caller.
+// caller should arrange for the returned channel to be closed (e.g. by
+// delegating it to an IO instance).
 func RecvMessageBytes(recv chan<- [][]byte) chan<- Data {
 	c := make(chan Data)
 

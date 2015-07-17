@@ -93,8 +93,8 @@ func (io *IO) Add(s *zmq.Socket, send <-chan Data, recv chan<- Data) (err error)
 	return
 }
 
-// Remove closes a socket.  If it has been registered, it will be removed in
-// orderly fashion.
+// Remove closes a socket.  If it has been registered, it will be removed.  The
+// recv channel (if any) will be closed.
 func (io *IO) Remove(s *zmq.Socket) (err error) {
 	fd, err := s.GetFd()
 	if err != nil {
