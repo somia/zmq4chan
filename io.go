@@ -44,7 +44,7 @@ func NewIO() (io *IO) {
 		workers: make(map[int32]*worker),
 	}
 
-	go eventLoop(io)
+	go io.eventLoop()
 	return
 }
 
@@ -86,7 +86,13 @@ func (io *IO) Add(s *zmq.Socket, send <-chan Data, recv chan<- Data) (err error)
 		return
 	}
 
-	go workerLoop(io, s, fd, w, send, recv, state)
+	go func() {
+		defer s.Close()
+		defer syscall.EpollCtl(io.epollFd, syscall.EPOLL_CTL_DEL, fd, nil)
+
+		w.socketLoop(s, send, recv, state)
+	}()
+
 	return
 }
 
@@ -113,7 +119,7 @@ func (io *IO) Remove(s *zmq.Socket) (err error) {
 	return
 }
 
-func eventLoop(io *IO) {
+func (io *IO) eventLoop() {
 	const mask = syscall.EPOLLIN | syscall.EPOLLERR | syscall.EPOLLHUP
 
 	buf := make([]syscall.EpollEvent, epollEventBufferSize)
@@ -161,18 +167,10 @@ func (w *worker) close() {
 	close(w.closer)
 }
 
-func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv chan<- Data, state zmq.State) {
-	defer func() {
-		if recv != nil {
-			close(recv)
-		}
-		syscall.EpollCtl(io.epollFd, syscall.EPOLL_CTL_DEL, fd, nil)
-		s.Close()
-	}()
-
-	const (
-		fullState = zmq.POLLIN | zmq.POLLOUT
-	)
+func (w *worker) socketLoop(s *zmq.Socket, send <-chan Data, recv chan<- Data, state zmq.State) {
+	if recv != nil {
+		defer close(recv)
+	}
 
 	var (
 		sendBuf     Data
@@ -199,6 +197,8 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 
 		select {
 		case <-w.notifier:
+			const fullState = zmq.POLLIN | zmq.POLLOUT
+
 			if state&fullState != fullState {
 				if state, err = s.GetEvents(); err != nil {
 					handleGeneralError(err)
