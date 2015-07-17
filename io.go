@@ -4,7 +4,6 @@ package zmq4chan
 
 import (
 	"sync"
-	"sync/atomic"
 	"syscall"
 
 	zmq "github.com/pebbe/zmq4"
@@ -58,9 +57,7 @@ func (io *IO) Add(s *zmq.Socket, send <-chan Data, recv chan<- Data) (err error)
 		return
 	}
 
-	w := &worker{
-		notifier: make(chan struct{}, 1),
-	}
+	w := newWorker()
 
 	io.lock.Lock()
 	io.workers[int32(fd)] = w
@@ -109,8 +106,7 @@ func (io *IO) Remove(s *zmq.Socket) (err error) {
 	io.lock.Unlock()
 
 	if w != nil {
-		atomic.StoreInt32(&w.closed, 1)
-		w.notify()
+		w.close()
 	} else {
 		err = s.Close()
 	}
@@ -144,7 +140,14 @@ func eventLoop(io *IO) {
 
 type worker struct {
 	notifier chan struct{}
-	closed   int32
+	closer   chan struct{}
+}
+
+func newWorker() *worker {
+	return &worker{
+		notifier: make(chan struct{}, 1),
+		closer:   make(chan struct{}),
+	}
 }
 
 func (w *worker) notify() {
@@ -152,6 +155,10 @@ func (w *worker) notify() {
 	case w.notifier <- struct{}{}:
 	default:
 	}
+}
+
+func (w *worker) close() {
+	close(w.closer)
 }
 
 func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv chan<- Data, state zmq.State) {
@@ -192,16 +199,15 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 
 		select {
 		case <-w.notifier:
-			if atomic.LoadInt32(&w.closed) != 0 {
-				return
-			}
-
 			if state&fullState != fullState {
 				if state, err = s.GetEvents(); err != nil {
 					handleGeneralError(err)
 					return
 				}
 			}
+
+		case <-w.closer:
+			return
 
 		case sendBuf, sendPending = <-sendActive:
 			if !sendPending {
