@@ -18,28 +18,14 @@ func TestIO(t *testing.T) {
 		addr2 = "tcp://127.0.0.1:12346"
 	)
 
-	s1, err := zmq.NewSocket(zmq.REP)
+	ctx, err := zmq.NewContext()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer io.Remove(s1)
-
-	s2, err := zmq.NewSocket(zmq.REP)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer io.Remove(s2)
-
-	if err := s1.Bind(addr1); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := s2.Bind(addr2); err != nil {
-		t.Fatal(err)
-	}
+	defer ctx.Term()
 
 	go func() {
-		s, err := zmq.NewSocket(zmq.REQ)
+		s, err := ctx.NewSocket(zmq.REQ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,18 +43,53 @@ func TestIO(t *testing.T) {
 			t.Logf("0 sending")
 
 			if _, err := s.SendMessage("hello", "world"); err != nil {
-				t.Fatal(err)
+				t.Logf("0 %s", err)
+				return
 			}
 
 			t.Logf("0 receiving")
 
-			if msg, err := s.RecvMessage(0); err == nil {
-				t.Logf("0 %s", msg)
-			} else {
-				t.Fatal(err)
+			msg, err := s.RecvMessage(0)
+			if err != nil {
+				t.Logf("0 %s", err)
+				return
 			}
+
+			t.Logf("0 %s", msg)
 		}
 	}()
+
+	ctx1, err := zmq.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx1.Term()
+
+	ctx2, err := zmq.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx2.Term()
+
+	s1, err := ctx1.NewSocket(zmq.REP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer io.Remove(s1)
+
+	s2, err := ctx2.NewSocket(zmq.REP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer io.Remove(s2)
+
+	if err := s1.Bind(addr1); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s2.Bind(addr2); err != nil {
+		t.Fatal(err)
+	}
 
 	send1 := make(chan zmqchan.Data)
 	recv1 := make(chan zmqchan.Data)
@@ -169,6 +190,8 @@ func TestLotsOfIO(t *testing.T) {
 	const (
 		numSockets = 503
 	)
+
+	defer zmq.Term()
 
 	done := make(chan struct{})
 
