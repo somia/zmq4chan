@@ -16,6 +16,8 @@
 //   s, err := zmq4.NewSocket(zmq4.REP)
 //   defer io.Remove(s)
 //
+//   err = s.Bind("tcp://*:12765")
+//
 //   recv := make(chan [][]byte)
 //   send := make(chan [][]byte)
 //   defer close(send)
