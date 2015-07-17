@@ -16,7 +16,7 @@ const (
 
 // Data holds a message part which will be sent or has been received.
 type Data struct {
-	Bytes []byte // non-nil
+	Bytes []byte
 	More  bool   // true if more parts will be sent/received
 }
 
@@ -168,25 +168,26 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 	)
 
 	var (
-		sendBuf Data
-		recvBuf Data
+		sendBuf     Data
+		sendPending bool
+		recvBuf     Data
+		recvPending bool
 	)
 
 	for {
 		var (
 			err error
-			ok  bool
 
-			sendChan <-chan Data
-			recvChan chan<- Data
+			sendActive <-chan Data
+			recvActive chan<- Data
 		)
 
-		if send != nil && sendBuf.Bytes == nil {
-			sendChan = send
+		if !sendPending {
+			sendActive = send
 		}
 
-		if recv != nil && recvBuf.Bytes != nil {
-			recvChan = recv
+		if recvPending {
+			recvActive = recv
 		}
 
 		select {
@@ -202,19 +203,20 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 				}
 			}
 
-		case sendBuf, ok = <-sendChan:
-			if !ok {
+		case sendBuf, sendPending = <-sendActive:
+			if !sendPending {
 				send = nil
 			}
 
-		case recvChan <- recvBuf:
+		case recvActive <- recvBuf:
+			recvPending = false
 			recvBuf.Bytes = nil
 		}
 
 		for {
-			retry := false
+			loop := false
 
-			if sendBuf.Bytes != nil && state&zmq.POLLOUT != 0 {
+			if sendPending && state&zmq.POLLOUT != 0 {
 				flags := zmq.DONTWAIT
 
 				if sendBuf.More {
@@ -222,8 +224,9 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 				}
 
 				if _, err = s.SendBytes(sendBuf.Bytes, flags); err == nil {
+					sendPending = false
 					sendBuf.Bytes = nil
-					retry = true
+					loop = true
 				} else if !handleIOError(err) {
 					return
 				}
@@ -234,12 +237,13 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 				}
 			}
 
-			if recvBuf.Bytes == nil && state&zmq.POLLIN != 0 {
+			if !recvPending && state&zmq.POLLIN != 0 {
 				if data, err := s.RecvBytes(zmq.DONTWAIT); err == nil {
 					if more, err := s.GetRcvmore(); err == nil {
 						recvBuf.Bytes = data
 						recvBuf.More = more
-						retry = true
+						recvPending = true
+						loop = true
 					} else {
 						handleGeneralError(err)
 						return
@@ -254,7 +258,7 @@ func workerLoop(io *IO, s *zmq.Socket, fd int, w *worker, send <-chan Data, recv
 				}
 			}
 
-			if !retry {
+			if !loop {
 				break
 			}
 		}
