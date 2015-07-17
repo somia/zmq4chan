@@ -21,11 +21,11 @@ var (
 	}
 
 	parts = []zmqchan.Data{
-		zmqchan.Data{[]byte("hello"), true},
-		zmqchan.Data{[]byte("world"), false},
-		zmqchan.Data{[]byte("123"), true},
-		zmqchan.Data{[]byte("4567"), true},
-		zmqchan.Data{[]byte("89"), false},
+		zmqchan.Data{Bytes: []byte("hello"), More: true},
+		zmqchan.Data{Bytes: []byte("world"), More: false},
+		zmqchan.Data{Bytes: []byte("123"), More: true},
+		zmqchan.Data{Bytes: []byte("4567"), More: true},
+		zmqchan.Data{Bytes: []byte("89"), More: false},
 	}
 )
 
